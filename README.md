@@ -15,7 +15,8 @@ This project combines:
 
 ## Architecture
 
-- Backend API: app.py
+- Backend API entry point: backend/main.py
+- Backend implementation: app.py
 - Structured storage: backend/structured_store.py
 - LLM abstraction: backend/llm_provider.py
 - RAG utilities: rag/
@@ -63,7 +64,7 @@ Sample values are in [.env.example](.env.example).
 ## Running backend
 
 ```bash
-python -m uvicorn app:app --host 0.0.0.0 --port 8080 --reload
+python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 ## Running frontend

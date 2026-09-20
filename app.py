@@ -2,7 +2,7 @@ import hashlib
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -65,16 +65,18 @@ app.add_middleware(
 ALLOWED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
 
 
+SUPPORTED_LANGUAGE_CODES = ("en", "kn", "hi")
+
+
 class ChatRequest(BaseModel):
     question: str = Field(min_length=1)
     document_id: str | None = None
-    language: str = "English"
-    mode: str = "patient"
+    language: Literal["en", "kn", "hi"] | None = None
 
 
 class TranslateRequest(BaseModel):
     text: str
-    target_language: str = "English"
+    target_language: Literal["en", "kn", "hi"] = "en"
 
 
 class HealthResponse(BaseModel):
@@ -107,6 +109,37 @@ def _clean_answer(answer: str) -> str:
         if cleaned.lower().startswith(prefix.lower()):
             cleaned = cleaned[len(prefix):].strip()
     return cleaned
+
+
+CHAT_MEMORY: dict[str, list[dict[str, str]]] = {}
+
+
+def _conversation_key(document_id: str | None) -> str:
+    return document_id or "general"
+
+
+def _conversation_context(document_id: str | None) -> str:
+    history = CHAT_MEMORY.get(_conversation_key(document_id), [])
+    if not history:
+        return ""
+    return "\n".join(
+        f"User: {entry['question']}\nAssistant: {entry['answer']}"
+        for entry in history[-5:]
+    )
+
+
+def _conversation_language(document_id: str | None, requested_language: str | None) -> str:
+    if requested_language:
+        return requested_language
+    history = CHAT_MEMORY.get(_conversation_key(document_id), [])
+    return history[-1].get("language", "en") if history else "en"
+
+
+def _remember_chat(document_id: str | None, question: str, answer: str, language: str) -> None:
+    key = _conversation_key(document_id)
+    history = CHAT_MEMORY.setdefault(key, [])
+    history.append({"question": question, "answer": answer, "language": language})
+    CHAT_MEMORY[key] = history[-5:]
 
 
 def _generate_document_id(file_bytes: bytes) -> str:
@@ -331,7 +364,7 @@ async def upload_report(file: UploadFile = File(...)) -> dict[str, Any]:
                 _store_chunks_for_document(document_id, safe_filename, extracted_text)
             except Exception:
                 pass
-        return {"success": True, "message": "A matching report was already stored. Duplicate upload prevented.", "document_id": store_payload["report_id"], "patient_id": store_payload.get("patient_id"), "duplicate": True, "filename": safe_filename}
+        return {"success": True, "message": "A matching report was already stored. Duplicate upload prevented.", "document_id": document_id, "report_id": store_payload["report_id"], "patient_id": store_payload.get("patient_id"), "duplicate": True, "filename": safe_filename}
 
     try:
         chunks_stored = _store_chunks_for_document(document_id, safe_filename, extracted_text)
@@ -358,9 +391,20 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     question_type = route_question(question)
+    conversation_context = _conversation_context(request.document_id)
+    language = _conversation_language(request.document_id, request.language)
+
     if question_type == "GENERAL":
-        answer = generate_answer("", question, question_type="GENERAL")
-        return {"success": True, "answer": _clean_answer(answer), "question_type": question_type, "sources": []}
+        answer = generate_answer(
+            "",
+            question,
+            question_type="GENERAL",
+            language=language,
+            conversation_context=conversation_context,
+        )
+        cleaned_answer = _clean_answer(answer)
+        _remember_chat(request.document_id, question, cleaned_answer, language)
+        return {"success": True, "answer": cleaned_answer, "question_type": question_type, "sources": []}
 
     if not request.document_id:
         return {
@@ -370,8 +414,12 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
             "sources": [],
         }
 
+    retrieval_question = question
+    if conversation_context:
+        retrieval_question = f"{conversation_context}\nFollow-up question: {question}"
+
     try:
-        results = retrieve_chunks(question, top_k=3, document_id=request.document_id)
+        results = retrieve_chunks(retrieval_question, top_k=3, document_id=request.document_id)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Error while searching the report: {str(exc)}") from exc
 
@@ -384,10 +432,18 @@ async def chat(request: ChatRequest) -> dict[str, Any]:
         return {"success": True, "answer": "I could not find that information in the uploaded report.", "question_type": question_type, "sources": []}
 
     context = build_context(docs)
-    answer = generate_answer(context, question, question_type=question_type)
+    answer = generate_answer(
+        context,
+        question,
+        question_type=question_type,
+        language=language,
+        conversation_context=conversation_context,
+    )
+    cleaned_answer = _clean_answer(answer)
+    _remember_chat(request.document_id, question, cleaned_answer, language)
     return {
         "success": True,
-        "answer": _clean_answer(answer),
+        "answer": cleaned_answer,
         "question_type": question_type,
         "sources": _first_or_none(results.get("metadatas", [])) if isinstance(results, dict) else [],
     }

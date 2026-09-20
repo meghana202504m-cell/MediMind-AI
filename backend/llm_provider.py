@@ -3,6 +3,9 @@ from typing import Any
 
 import requests
 
+SUPPORTED_LANGUAGE_CODES = {'en', 'kn', 'hi'}
+LANGUAGE_NAMES = {'en': 'English', 'kn': 'Kannada', 'hi': 'Hindi'}
+
 
 class LLMProvider:
     """Abstraction for local or cloud LLM providers."""
@@ -18,10 +21,10 @@ class LLMProvider:
             return {"text": result}
 
     def translate(self, text: str, target_language: str) -> str:
-        language_name = (target_language or 'English').strip()
+        language_code = (target_language or 'en').strip().lower()
         if not text.strip():
             return text
-        if language_name.lower() in {'english', 'en'}:
+        if language_code == 'en':
             return text
         raise NotImplementedError
 
@@ -53,9 +56,12 @@ class LocalLLMProvider(LLMProvider):
     def translate(self, text: str, target_language: str) -> str:
         if not text.strip():
             return text
-        language_name = (target_language or 'English').strip().lower()
-        if language_name in {'english', 'en'}:
+        language_code = (target_language or 'en').strip().lower()
+        if language_code not in SUPPORTED_LANGUAGE_CODES:
+            raise ValueError('Unsupported language code.')
+        if language_code == 'en':
             return text
+        language_name = LANGUAGE_NAMES[language_code]
         translation_prompt = (
             f'Translate the following medical explanation into {target_language}. '
             'Keep medical values, units, biomarker names, and numerical accuracy unchanged. '

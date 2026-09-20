@@ -2,13 +2,14 @@ import chromadb
 from sentence_transformers import SentenceTransformer
 
 
-# -----------------------------------
-# Load embedding model
-# -----------------------------------
+_model = None
 
-model = SentenceTransformer(
-    "all-MiniLM-L6-v2"
-)
+
+def get_model():
+    global _model
+    if _model is None:
+        _model = SentenceTransformer("all-MiniLM-L6-v2")
+    return _model
 
 
 # -----------------------------------
@@ -31,7 +32,7 @@ collection = client.get_or_create_collection(
 
 def retrieve_chunks(query, top_k=3, document_id=None):
 
-    query_embedding = model.encode(
+    query_embedding = get_model().encode(
         [query]
     ).tolist()
 

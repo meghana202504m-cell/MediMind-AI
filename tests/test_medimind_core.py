@@ -1,10 +1,13 @@
+import hashlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app import app
+from backend.main import app as canonical_app
 
 client = TestClient(app)
+canonical_client = TestClient(canonical_app)
 
 
 def _report_bytes() -> bytes:
@@ -19,6 +22,12 @@ def test_health_endpoint():
     assert payload['status'] in {'healthy', 'ok'}
 
 
+def test_backend_entrypoint_exposes_frontend_upload_route():
+    assert canonical_app is app
+    response = canonical_client.post('/reports/upload')
+    assert response.status_code == 422
+
+
 def test_general_medical_question_and_duplicate_upload():
     general = client.post('/chat', json={'question': 'What is HbA1c?'})
     assert general.status_code == 200
@@ -29,6 +38,7 @@ def test_general_medical_question_and_duplicate_upload():
     first = client.post('/upload', files={'file': file_payload})
     assert first.status_code == 200
     report_id = first.json()['document_id']
+    assert report_id == hashlib.sha256(pdf_bytes).hexdigest()
 
     second = client.post('/upload', files={'file': file_payload})
     assert second.status_code == 200
